@@ -7,4 +7,12 @@ go run .
 git init -b main
 git add .
 git commit -m "ReadCloser interface and channel to read from file"
+git remote add origin https://github.com/prantoran/httpfromtcp
+git remote -v
+git push -u origin main
+```
 
+```bash
+go run . | tee /tmp/tcp.txt
+printf "Are you willing to go all the way?" | nc -D -c -w 1 127.0.0.1 42069
+```
