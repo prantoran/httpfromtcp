@@ -16,3 +16,13 @@ git push -u origin main
 go run . | tee /tmp/tcp.txt
 printf "Are you willing to go all the way?" | nc -D -c -w 1 127.0.0.1 42069
 ```
+
+```bash
+go run ./cmd/tcplistener | tee /tmp/tcplistener.txt
+nc -v localhost 42069
+```
+
+```bash
+go run ./cmd/udpsender | tee /tmp/udpsender.txt
+nc -u -l 42069
+```
