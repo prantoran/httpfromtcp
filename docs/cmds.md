@@ -26,3 +26,14 @@ nc -v localhost 42069
 go run ./cmd/udpsender | tee /tmp/udpsender.txt
 nc -u -l 42069
 ```
+
+```bash
+go run ./cmd/tcplistener | tee /tmp/tcplistener.txt
+curl localhost:42069/coffee
+curl -X POST -H "Content-Type: application/json" -d '{"flavor": "dark mode"}' http://localhost:42069/coffee
+```
+
+```bash
+mkdir -p ./internal/request
+go test ./...
+```
