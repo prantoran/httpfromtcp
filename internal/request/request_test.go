@@ -1,6 +1,7 @@
 package request
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -8,11 +9,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type chunkReader struct {
+	data            string
+	numBytesPerRead int
+	pos             int
+}
+
+// Reads up to len(p) numBytesPerRead bytes from the string per call
+// it useful for simulating a variable numbr of bytes per chunk from a reader
+func (cr *chunkReader) Read(p []byte) (n int, err error) {
+	if cr.pos >= len(cr.data) {
+		return 0, io.EOF
+	}
+	endIndex := min(cr.pos+cr.numBytesPerRead, len(cr.data))
+
+	n = copy(p, cr.data[cr.pos:endIndex])
+	cr.pos += n
+	if n > cr.numBytesPerRead {
+		n = cr.numBytesPerRead
+		cr.pos -= (n - cr.numBytesPerRead)
+	}
+
+	return n, nil
+}
+
 func TestRequestLineParse(t *testing.T) {
 	assert.Equal(t, "GET", "GET")
 
+	reader := &chunkReader{
+		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
+		numBytesPerRead: 3,
+	}
+
 	// Test: Good GET Request Line
-	r, err := RequestFromReader(strings.NewReader("GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n"))
+	// r, err := RequestFromReader(strings.NewReader("GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n"))
+	r, err := RequestFromReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, r)
 	assert.Equal(t, "GET", r.RequestLine.Method)
