@@ -1,3 +1,11 @@
+/*
+	Run the TCP listener and pipe the output to a file:
+		go run ./cmd/tcplistener | tee /tmp/requestline.txt
+
+	Test parsing:
+		curl http://localhost:42069
+*/
+
 package main
 
 import (
@@ -7,6 +15,8 @@ import (
 	"log"
 	"net"
 	"os"
+
+	"github.com/prantoran/httpfromtcp/internal/request"
 )
 
 func getLinesChannel(f io.ReadCloser) <-chan string {
@@ -80,9 +90,18 @@ func readTCP() {
 		if err != nil {
 			log.Fatal("Error accepting connection:", err)
 		}
-		for line := range getLinesChannel(conn) {
-			fmt.Printf("Read: %s\n", line)
+		// for line := range getLinesChannel(conn) {
+		// 	fmt.Printf("Read: %s\n", line)
+		// }
+		r, err := request.RequestFromReader(conn)
+		if err != nil {
+			log.Fatal("Error reading request:", err)
 		}
+		fmt.Printf("Request line:\n")
+		fmt.Printf("- Method: %s\n", r.RequestLine.Method)
+		fmt.Printf("- Target: %s\n", r.RequestLine.RequestTarget)
+		fmt.Printf("- Version: %s\n", r.RequestLine.HttpVersion)
+
 	}
 }
 
