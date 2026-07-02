@@ -102,6 +102,12 @@ func readTCP() {
 		fmt.Printf("- Target: %s\n", r.RequestLine.RequestTarget)
 		fmt.Printf("- Version: %s\n", r.RequestLine.HttpVersion)
 
+		fmt.Printf("Headers:\n")
+		r.Headers.ForEach(func(key, value string) {
+			fmt.Printf("- %s: %s\n", key, value)
+		})
+
+		conn.Close()
 	}
 }
 
