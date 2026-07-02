@@ -6,6 +6,31 @@ import (
 	"strings"
 )
 
+func isToken(str []byte) bool {
+	if len(str) == 0 {
+		return false
+	}
+
+	for _, ch := range str {
+		found := false
+		if ch >= 'A' && ch <= 'Z' ||
+			ch >= 'a' && ch <= 'z' ||
+			ch >= '0' && ch <= '9' {
+			found = true
+		}
+		switch ch {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			found = true
+		}
+
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
 var rn = []byte("\r\n")
 
 func parseHeader(fieldLine []byte) (string, string, error) {
@@ -66,6 +91,10 @@ func (h *Headers) Parse(data []byte) (int, bool, error) {
 		name, value, err := parseHeader(data[read : read+idx])
 		if err != nil {
 			return 0, false, err
+		}
+
+		if !isToken([]byte(name)) {
+			return 0, false, fmt.Errorf("malformed header name")
 		}
 		read += idx + len(rn)
 		h.Set(name, value)
