@@ -31,7 +31,7 @@ func isToken(str []byte) bool {
 	return true
 }
 
-var rn = []byte("\r\n")
+var RN = []byte("\r\n")
 
 func parseHeader(fieldLine []byte) (string, string, error) {
 	parts := bytes.SplitN(fieldLine, []byte(": "), 2)
@@ -80,7 +80,7 @@ func (h *Headers) Parse(data []byte) (int, bool, error) {
 	done := false
 
 	for {
-		idx := bytes.Index(data[read:], rn)
+		idx := bytes.Index(data[read:], RN)
 
 		if idx == -1 {
 			break
@@ -89,7 +89,7 @@ func (h *Headers) Parse(data []byte) (int, bool, error) {
 		// Empty header
 		if idx == 0 {
 			done = true
-			read += len(rn)
+			read += len(RN)
 			break
 		}
 
@@ -101,7 +101,7 @@ func (h *Headers) Parse(data []byte) (int, bool, error) {
 		if !isToken([]byte(name)) {
 			return 0, false, fmt.Errorf("malformed header name")
 		}
-		read += idx + len(rn)
+		read += idx + len(RN)
 		h.Set(name, value)
 	}
 

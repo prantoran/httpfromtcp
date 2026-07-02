@@ -5,30 +5,35 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/prantoran/httpfromtcp/internal/headers"
 )
 
 type parserState string
 
 const (
-	StateInit  parserState = "init"
-	StateDone  parserState = "done"
-	StateError parserState = "error"
+	StateInit    parserState = "init"
+	StateHeaders parserState = "headers"
+	StateDone    parserState = "done"
+	StateError   parserState = "error"
 )
 
 type Request struct {
 	RequestLine RequestLine
 	state       parserState
+	Headers     *headers.Headers
 }
 
 func (r *Request) parse(data []byte) (int, error) {
 	read := 0
 outer:
 	for {
+		curData := data[read:]
 		switch r.state {
 		case StateError:
 			return 0, ErrorRequestInErrorState
 		case StateInit:
-			rl, n, err := parseRequestLine(data[read:])
+			rl, n, err := parseRequestLine(curData)
 			if err != nil {
 				r.state = StateError
 				return 0, err
@@ -38,9 +43,24 @@ outer:
 			}
 			r.RequestLine = *rl
 			read += n
-			r.state = StateDone
+			r.state = StateHeaders
+		case StateHeaders:
+			n, done, err := r.Headers.Parse(curData)
+			if err != nil {
+				r.state = StateError
+				return 0, err
+			}
+			if n == 0 && !done {
+				break outer
+			}
+			read += n
+			if done {
+				r.state = StateDone
+			}
 		case StateDone:
 			break outer
+		default:
+			return 0, fmt.Errorf("unknown state: %s", r.state)
 		}
 	}
 	return read, nil
@@ -61,7 +81,8 @@ type RequestLine struct {
 
 func newRequest() *Request {
 	return &Request{
-		state: StateInit,
+		state:   StateInit,
+		Headers: headers.NewHeaders(),
 	}
 }
 
@@ -102,7 +123,7 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	request := newRequest()
 
-	buf := make([]byte, 1024)
+	buf := make([]byte, 4096)
 	bufLen := 0
 
 	for !request.done() && !request.error() {
