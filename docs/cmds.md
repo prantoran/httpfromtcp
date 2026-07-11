@@ -37,3 +37,13 @@ curl -X POST -H "Content-Type: application/json" -d '{"flavor": "dark mode"}' ht
 mkdir -p ./internal/request
 go test ./...
 ```
+
+# Tests
+
+## Running a specific test
+```bash
+go test \
+    -test.fullpath=true \
+    -timeout 30s \
+    -run ^TestParseBody$ github.com/prantoran/httpfromtcp/internal/request
+```

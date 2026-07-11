@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/prantoran/httpfromtcp/internal/headers"
 )
@@ -14,6 +15,7 @@ type parserState string
 const (
 	StateInit    parserState = "init"
 	StateHeaders parserState = "headers"
+	StateBody    parserState = "body"
 	StateDone    parserState = "done"
 	StateError   parserState = "error"
 )
@@ -22,6 +24,7 @@ type Request struct {
 	RequestLine RequestLine
 	state       parserState
 	Headers     *headers.Headers
+	Body        string
 }
 
 func (r *Request) parse(data []byte) (int, error) {
@@ -29,6 +32,10 @@ func (r *Request) parse(data []byte) (int, error) {
 outer:
 	for {
 		curData := data[read:]
+		if len(curData) == 0 {
+			break outer
+		}
+
 		switch r.state {
 		case StateError:
 			return 0, ErrorRequestInErrorState
@@ -44,6 +51,22 @@ outer:
 			r.RequestLine = *rl
 			read += n
 			r.state = StateHeaders
+
+		case StateBody:
+			length := GetIntHeader(r.Headers, "content-length", 0)
+			if length == 0 {
+				r.state = StateDone
+				break outer
+			}
+
+			remaining := min(length-len(r.Body), len(curData))
+			r.Body += string(curData[:remaining])
+			read += remaining
+
+			if len(r.Body) == length {
+				r.state = StateDone
+			}
+
 		case StateHeaders:
 			n, done, err := r.Headers.Parse(curData)
 			if err != nil {
@@ -55,7 +78,11 @@ outer:
 			}
 			read += n
 			if done {
-				r.state = StateDone
+				if GetIntHeader(r.Headers, "content-length", 0) > 0 {
+					r.state = StateBody
+				} else {
+					r.state = StateDone
+				}
 			}
 		case StateDone:
 			break outer
@@ -79,10 +106,23 @@ type RequestLine struct {
 	Method        string
 }
 
+func GetIntHeader(headers *headers.Headers, key string, defaultValue int) int {
+	valueStr, exists := headers.Get(key)
+	if !exists {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
 func newRequest() *Request {
 	return &Request{
 		state:   StateInit,
 		Headers: headers.NewHeaders(),
+		Body:    "",
 	}
 }
 
@@ -130,10 +170,12 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		n, err := reader.Read(buf[bufLen:])
 		if err != nil {
 			if err == io.EOF {
+				if request.state == StateBody && len(request.Body) < GetIntHeader(request.Headers, "content-length", 0) {
+					return nil, errors.Join(fmt.Errorf("incomplete request"), err)
+				}
 				break
-			} else {
-				return nil, errors.Join(fmt.Errorf("unable to read from reader"), err)
 			}
+			return nil, errors.Join(fmt.Errorf("unable to read from reader"), err)
 		}
 		bufLen += n
 		readN, err := request.parse(buf[:bufLen])

@@ -4,6 +4,7 @@
 
 	Test parsing:
 		curl http://localhost:42069
+		curl -X POST http://localhost:42069 -d '{"model": "a32", "type": "home"}'
 */
 
 package main
@@ -106,6 +107,11 @@ func readTCP() {
 		r.Headers.ForEach(func(key, value string) {
 			fmt.Printf("- %s: %s\n", key, value)
 		})
+
+		if request.GetIntHeader(r.Headers, "content-length", 0) > 0 {
+			fmt.Printf("Body:\n")
+			fmt.Printf("%s\n", r.Body)
+		}
 
 		conn.Close()
 	}
