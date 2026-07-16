@@ -66,6 +66,11 @@ func (h *Headers) Get(key string) (string, bool) {
 	return val, ok
 }
 
+func (h *Headers) Replace(key, value string) {
+	key = strings.ToLower(key)
+	h.headers[key] = value
+}
+
 func (h *Headers) Set(key, value string) {
 	key = strings.ToLower(key)
 	if v, ok := h.headers[key]; ok {
