@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +14,7 @@ type HandlerError struct {
 	Message    string
 }
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
 
 type Server struct {
 	Port    int
@@ -27,31 +25,15 @@ type Server struct {
 func runConnection(s *Server, conn io.ReadWriteCloser) {
 	defer conn.Close()
 
-	headers := response.GetDefaultHeaders(0)
-	r, err := request.RequestFromReader(bufio.NewReader(conn))
+	responseWriter := response.NewWriter(conn)
+	r, err := request.RequestFromReader(conn)
 	if err != nil {
-		response.WriteStatusLine(conn, response.StatusOK)
-		response.WriteHeaders(conn, headers)
+		responseWriter.WriteStatusLine(response.StatusOK)
+		responseWriter.WriteHeaders(*response.GetDefaultHeaders(0))
 		return
 	}
 
-	writer := bytes.NewBuffer([]byte{})
-	handlerErr := s.handler(writer, r)
-
-	var body []byte = nil
-	var status response.StatusCode = response.StatusOK
-	if handlerErr != nil {
-		status = handlerErr.StatusCode
-		body = []byte(handlerErr.Message)
-	} else {
-		body = writer.Bytes()
-	}
-
-	headers.Replace("Content-length", fmt.Sprintf("%d", len(body)))
-
-	response.WriteStatusLine(conn, status)
-	response.WriteHeaders(conn, headers)
-	conn.Write(body)
+	s.handler(responseWriter, r)
 }
 
 func runServer(s *Server, listener net.Listener) {
