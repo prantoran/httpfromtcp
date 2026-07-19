@@ -8,10 +8,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/prantoran/httpfromtcp/internal/request"
@@ -70,6 +75,37 @@ func main() {
 			body = respond500()
 			status = response.StatusInternalServerError
 
+		} else if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/stream") {
+			target := req.RequestLine.RequestTarget
+			res, err := http.Get("https://httpbin.org/" + target[len("/httpbin/"):])
+			if err != nil {
+				body = respond500()
+				status = response.StatusInternalServerError
+			} else {
+				w.WriteStatusLine(response.StatusOK)
+				h.Delete("Content-length")
+				h.Set("Transfer-Encoding", "chunked")
+				h.Replace("Content-Type", "text/plain")
+				w.WriteHeaders(*h)
+
+				for {
+					data := make([]byte, 32)
+					n, err := res.Body.Read(data)
+					if err != nil {
+						if errors.Is(io.EOF, err) {
+							slog.Info("End of chunks reached\n")
+							break
+						}
+						slog.Error(fmt.Sprintf("Error: %v\n", err))
+						break
+					}
+					w.WriteBody([]byte(fmt.Sprintf("%x\r\n", n)))
+					w.WriteBody(data[:n])
+					w.WriteBody([]byte("\r\n"))
+				}
+				w.WriteBody([]byte("0\r\n\r\n"))
+				return
+			}
 		}
 
 		w.WriteStatusLine(status)

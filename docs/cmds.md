@@ -47,3 +47,18 @@ go test \
     -timeout 30s \
     -run ^TestParseBody$ github.com/prantoran/httpfromtcp/internal/request
 ```
+
+# Misc
+## netcat
+
+For testing chunked encoding
+
+```bash
+echo -e "GET /httpbin/stream/5 HTTP/1.1\r\nHost: localhost:42069\r\nConnection: close\r\n\r\n" | nc localhost 42069
+```
+
+## httpbin
+
+```bash
+curl --http1.1 -v https://httpbin.org/stream/5
+```
