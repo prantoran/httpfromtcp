@@ -8,6 +8,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +20,19 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/prantoran/httpfromtcp/internal/headers"
 	"github.com/prantoran/httpfromtcp/internal/request"
 	"github.com/prantoran/httpfromtcp/internal/response"
 	"github.com/prantoran/httpfromtcp/internal/server"
 )
+
+func toStr(bytes []byte) string {
+	out := ""
+	for _, b := range bytes {
+		out += fmt.Sprintf("%02x", b)
+	}
+	return out
+}
 
 const port = 42069
 
@@ -75,7 +85,7 @@ func main() {
 			body = respond500()
 			status = response.StatusInternalServerError
 
-		} else if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/stream") {
+		} else if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/") {
 			target := req.RequestLine.RequestTarget
 			res, err := http.Get("https://httpbin.org/" + target[len("/httpbin/"):])
 			if err != nil {
@@ -86,8 +96,11 @@ func main() {
 				h.Delete("Content-length")
 				h.Set("Transfer-Encoding", "chunked")
 				h.Replace("Content-Type", "text/plain")
+				h.Set("Trailer", "X-Content-SHA256")
+				h.Set("Trailer", "X-Content-Length")
 				w.WriteHeaders(*h)
 
+				fullBody := []byte{}
 				for {
 					data := make([]byte, 32)
 					n, err := res.Body.Read(data)
@@ -99,11 +112,20 @@ func main() {
 						slog.Error(fmt.Sprintf("Error: %v\n", err))
 						break
 					}
+
+					fullBody = append(fullBody, data[:n]...)
 					w.WriteBody([]byte(fmt.Sprintf("%x\r\n", n)))
 					w.WriteBody(data[:n])
 					w.WriteBody([]byte("\r\n"))
 				}
-				w.WriteBody([]byte("0\r\n\r\n"))
+				w.WriteBody([]byte("0\r\n"))
+				trailers := headers.NewHeaders()
+				out := sha256.Sum256(fullBody)
+				trailers.Set("X-Content_SHA256", toStr(out[:]))
+				trailers.Set("X-Content-Length", fmt.Sprintf("%d", len(fullBody)))
+				w.WriteHeaders(*trailers)
+				w.WriteBody([]byte("0\r\n"))
+
 				return
 			}
 		}
