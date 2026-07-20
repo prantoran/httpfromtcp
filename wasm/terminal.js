@@ -1,0 +1,482 @@
+    // ====================================================================
+    // Terminal Emulator Logic
+    // ====================================================================
+
+    const terminal = document.getElementById('terminal');
+    const logsTerminal = document.getElementById('logs-terminal');
+    const commandInput = document.getElementById('command-input');
+
+    // Command history for up/down arrow navigation (like a real terminal)
+    const commandHistory = [];
+    let historyIndex = -1;
+
+    // ====================================================================
+    // Log Interception
+    // ====================================================================
+
+    function appendLogLine(text, type = 'info') {
+      const line = document.createElement('div');
+      line.className = 'line log-' + type;
+      line.textContent = text;
+      logsTerminal.appendChild(line);
+      logsTerminal.scrollTop = logsTerminal.scrollHeight;
+    }
+
+    const originalConsoleLog = console.log;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
+
+    console.log = function(...args) {
+      originalConsoleLog.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'info');
+    };
+
+    console.warn = function(...args) {
+      originalConsoleWarn.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'warn');
+    };
+
+    console.error = function(...args) {
+      originalConsoleError.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'error');
+    };
+
+    // ====================================================================
+    // Output Helpers
+    // ====================================================================
+
+    /**
+     * Append a line of text to the terminal output.
+     * @param {string} text - The text content to display
+     * @param {string} className - CSS class for styling (e.g., 'boot-ok', 'error')
+     */
+    function appendLine(text, className = '') {
+      const line = document.createElement('div');
+      line.className = 'line' + (className ? ' ' + className : '');
+      line.textContent = text;
+      terminal.appendChild(line);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    /**
+     * Display a multi-line raw HTTP response with syntax highlighting.
+     * Status line gets one color, headers another, body gets default color.
+     * @param {string} rawResponse - The complete raw HTTP/1.1 response
+     */
+    function displayResponse(rawResponse) {
+      const lines = rawResponse.split('\n');
+      let inHeaders = true;
+      let headersDone = false;
+
+      for (const line of lines) {
+        const trimmed = line.replace(/\r$/, '');
+
+        if (!headersDone && inHeaders) {
+          if (trimmed.startsWith('HTTP/')) {
+            // Status line: "HTTP/1.1 200 OK"
+            appendLine(trimmed, 'response-status');
+          } else if (trimmed === '') {
+            // Blank line = end of headers
+            appendLine('', '');
+            headersDone = true;
+            inHeaders = false;
+          } else {
+            // Header: "content-type: text/html"
+            appendLine(trimmed, 'response-header');
+          }
+        } else {
+          // Body
+          appendLine(trimmed, 'response-body');
+        }
+      }
+    }
+
+    // ====================================================================
+    // Curl Command Parser
+    // ====================================================================
+
+    /**
+     * Parse a curl command string into its components.
+     * Supports: -X METHOD, -H "Header: Value", -d "body", -i, -v
+     *
+     * Examples:
+     *   "curl localhost:42069/"
+     *   "curl -X POST -H 'Content-Type: text/plain' -d 'hello' localhost:42069/"
+     *   "curl -i -v http://localhost:42069/yourproblem"
+     *
+     * @param {string} input - The full curl command string
+     * @returns {object} Parsed command: { method, path, headers, body, showHeaders, verbose }
+     */
+    function parseCurlCommand(input) {
+      // Tokenize respecting quoted strings
+      const tokens = [];
+      let current = '';
+      let inQuote = null;
+
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+        if (inQuote) {
+          if (ch === inQuote) {
+            inQuote = null;
+          } else {
+            current += ch;
+          }
+        } else if (ch === '"' || ch === "'") {
+          inQuote = ch;
+        } else if (ch === ' ' || ch === '\t') {
+          if (current) {
+            tokens.push(current);
+            current = '';
+          }
+        } else {
+          current += ch;
+        }
+      }
+      if (current) tokens.push(current);
+
+      // First token should be "curl"
+      if (tokens.length === 0 || tokens[0] !== 'curl') {
+        return null;
+      }
+
+      const result = {
+        method: 'GET',
+        path: '/',
+        headers: [],
+        body: '',
+        showHeaders: true,  // -i is default on in our terminal
+        verbose: false,
+      };
+
+      let i = 1;
+      while (i < tokens.length) {
+        const token = tokens[i];
+
+        if (token === '-X' && i + 1 < tokens.length) {
+          result.method = tokens[++i].toUpperCase();
+        } else if (token === '-H' && i + 1 < tokens.length) {
+          result.headers.push(tokens[++i]);
+        } else if (token === '-d' && i + 1 < tokens.length) {
+          result.body = tokens[++i];
+          // -d implies POST if method wasn't explicitly set
+          if (result.method === 'GET') {
+            result.method = 'POST';
+          }
+        } else if (token === '-i') {
+          result.showHeaders = true;
+        } else if (token === '-v') {
+          result.verbose = true;
+        } else if (!token.startsWith('-')) {
+          // This is the URL — extract the path
+          let url = token;
+
+          // Strip scheme: "http://localhost:42069/path" → "localhost:42069/path"
+          url = url.replace(/^https?:\/\//, '');
+
+          // Strip host: "localhost:42069/path" → "/path"
+          // Also handle "localhost/path" (no port)
+          url = url.replace(/^localhost(:\d+)?/, '');
+
+          // Ensure path starts with /
+          if (!url.startsWith('/')) {
+            url = '/' + url;
+          }
+
+          result.path = url;
+        }
+
+        i++;
+      }
+
+      return result;
+    }
+
+    // ====================================================================
+    // Request Execution
+    // ====================================================================
+
+    /**
+     * Execute a parsed curl command by sending a fetch() request through the
+     * Service Worker, which routes it to the Go WASM handler.
+     *
+     * The fetch URL uses the /api/ prefix so the Service Worker knows to
+     * intercept it (other requests like loading .js files pass through).
+     *
+     * @param {object} parsed - Output from parseCurlCommand()
+     */
+    async function executeRequest(parsed) {
+      if (parsed.verbose) {
+        appendLine(`> ${parsed.method} ${parsed.path} HTTP/1.1`, 'boot-cmd');
+        appendLine(`> Host: localhost:${42069}`, 'boot-cmd');
+        for (const h of parsed.headers) {
+          appendLine(`> ${h}`, 'boot-cmd');
+        }
+        appendLine('>', 'boot-cmd');
+      }
+
+      try {
+        // Build headers string for the Go handler
+        // Format: "Header1: Value1\nHeader2: Value2"
+        const headersStr = parsed.headers.join('\n');
+
+        // Call the Go WASM handler directly via the global function.
+        // This avoids the Service Worker round-trip for simplicity.
+        // handleHTTPRequest is registered by wasm_bridge.go via syscall/js.
+        if (typeof globalThis.handleHTTPRequest !== 'function') {
+          appendLine('Error: Go WASM server is not ready. Please wait for boot to complete.', 'error');
+          return;
+        }
+
+        let fullResponse = '';
+        let resolveStream;
+        const streamDone = new Promise(r => resolveStream = r);
+
+        const rawHeaders = await globalThis.handleHTTPRequest(
+          parsed.method,
+          parsed.path,
+          headersStr,
+          parsed.body,
+          (chunk) => {
+             fullResponse += new TextDecoder().decode(chunk);
+          },
+          () => {
+             resolveStream();
+          }
+        );
+
+        await streamDone;
+
+        if (parsed.verbose) {
+          appendLine('', '');
+        }
+
+        displayResponse(rawHeaders + fullResponse);
+      } catch (err) {
+        appendLine(`Error: ${err.message}`, 'error');
+      }
+    }
+
+    // ====================================================================
+    // Help Text
+    // ====================================================================
+
+    function showHelp() {
+      const helpText = [
+        'Go HTTP Server — WebAssembly Terminal',
+        '======================================',
+        '',
+        'This terminal runs a Go HTTP/1.1 server entirely in your browser',
+        'using WebAssembly. Type curl commands to send requests.',
+        '',
+        'Available routes:',
+        '  /              — 200 OK success page',
+        '  /yourproblem   — 400 Bad Request error page',
+        '  /myproblem     — 500 Internal Server Error page',
+        '',
+        'Sample commands:',
+        '  curl localhost:42069/',
+        '  curl localhost:42069/yourproblem',
+        '  curl localhost:42069/myproblem',
+        '  curl -X GET localhost:42069/',
+        '  curl -i localhost:42069/yourproblem',
+        '  curl -v localhost:42069/',
+        '  curl http://localhost:42069/myproblem',
+        '',
+        'Supported curl flags:',
+        '  -X METHOD          HTTP method (GET, POST, etc.)',
+        '  -H "Key: Value"    Add a request header',
+        '  -d "body"          Request body (implies POST)',
+        '  -i                 Show response headers (default: on)',
+        '  -v                 Verbose output (show request details)',
+        '',
+        'Special commands:',
+        '  help     Show this help message',
+        '  clear    Clear the terminal',
+        '',
+        'Note: "localhost:42069" is a simulated address — no real TCP port',
+        'is opened. Requests are processed entirely in-browser by the Go',
+        'WASM server through a Service Worker bridge.',
+      ];
+
+      for (const line of helpText) {
+        appendLine(line, 'help');
+      }
+    }
+
+    // ====================================================================
+    // Command Processing
+    // ====================================================================
+
+    /**
+     * Process a command entered in the terminal input.
+     * Supports: curl, help, clear, and error messages for unknown commands.
+     */
+    async function processCommand(input) {
+      const trimmed = input.trim();
+      if (!trimmed) return;
+
+      // Show the command in the terminal (like a real terminal echo)
+      appendLine(`$ ${trimmed}`, 'prompt');
+
+      // Add to history
+      commandHistory.push(trimmed);
+      historyIndex = commandHistory.length;
+
+      if (trimmed === 'clear') {
+        terminal.innerHTML = '';
+        return;
+      }
+
+      if (trimmed === 'help') {
+        showHelp();
+        return;
+      }
+
+      if (trimmed.startsWith('curl ') || trimmed === 'curl') {
+        if (trimmed === 'curl') {
+          appendLine('curl: try \'curl --help\' for more information', 'error');
+          appendLine('Usage: curl localhost:42069/', 'help');
+          return;
+        }
+
+        const parsed = parseCurlCommand(trimmed);
+        if (!parsed) {
+          appendLine('Error: could not parse curl command', 'error');
+          return;
+        }
+
+        await executeRequest(parsed);
+        return;
+      }
+
+      // Unknown command
+      const cmd = trimmed.split(' ')[0];
+      appendLine(`command not found: ${cmd}. Try: curl localhost:42069/`, 'error');
+    }
+
+    // ====================================================================
+    // Input Event Handlers
+    // ====================================================================
+
+    commandInput.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const value = commandInput.value;
+        commandInput.value = '';
+        await processCommand(value);
+      } else if (e.key === 'ArrowUp') {
+        // Navigate command history (older)
+        e.preventDefault();
+        if (historyIndex > 0) {
+          historyIndex--;
+          commandInput.value = commandHistory[historyIndex];
+        }
+      } else if (e.key === 'ArrowDown') {
+        // Navigate command history (newer)
+        e.preventDefault();
+        if (historyIndex < commandHistory.length - 1) {
+          historyIndex++;
+          commandInput.value = commandHistory[historyIndex];
+        } else {
+          historyIndex = commandHistory.length;
+          commandInput.value = '';
+        }
+      }
+    });
+
+    // Focus input when clicking anywhere in the terminal
+    terminal.addEventListener('click', () => {
+      commandInput.focus();
+    });
+
+    // ====================================================================
+    // Boot Sequence
+    // ====================================================================
+
+    /**
+     * Initialize the Go WASM server:
+     * 1. Load wasm_exec.js (already loaded via <script> tag)
+     * 2. Fetch and instantiate main.wasm
+     * 3. Register the Service Worker
+     * 4. Enable the terminal input
+     *
+     * Each step is displayed in the terminal as a boot log entry.
+     */
+    async function boot() {
+      try {
+        // Step 1: wasm_exec.js is loaded via <script> tag
+        appendLine('$ Loading wasm_exec.js...', 'boot-cmd');
+        if (typeof Go === 'undefined') {
+          appendLine('✗ Failed to load wasm_exec.js — Go class not found', 'boot-err');
+          appendLine('  Make sure wasm_exec.js is in the same directory as index.html', 'boot-err');
+          appendLine('  Run: make wasm-setup', 'boot-err');
+          return;
+        }
+        appendLine('✓ wasm_exec.js loaded', 'boot-ok');
+
+        // Step 2: Fetch and instantiate main.wasm
+        appendLine('$ Fetching main.wasm...', 'boot-cmd');
+        const go = new Go();
+
+        let wasm;
+        try {
+          const result = await WebAssembly.instantiateStreaming(
+            fetch('main.wasm'),
+            go.importObject
+          );
+          wasm = result;
+        } catch (streamErr) {
+          // Fallback for servers that don't set application/wasm MIME type
+          appendLine('  (streaming failed, trying ArrayBuffer fallback...)', 'boot-info');
+          const response = await fetch('main.wasm');
+          const bytes = await response.arrayBuffer();
+          wasm = await WebAssembly.instantiate(bytes, go.importObject);
+        }
+
+        appendLine('✓ main.wasm loaded and instantiated', 'boot-ok');
+
+        // Step 3: Start the Go runtime (this calls main() in main_wasm.go)
+        // go.run() is async — it starts the Go program and resolves when it exits.
+        // Since main_wasm.go uses select{}, it never exits.
+        appendLine('$ Starting Go runtime...', 'boot-cmd');
+        go.run(wasm.instance);
+
+        // Give the Go runtime a moment to register handleHTTPRequest
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        if (typeof globalThis.handleHTTPRequest === 'function') {
+          appendLine('✓ Go HTTP server initialized', 'boot-ok');
+        } else {
+          appendLine('✗ handleHTTPRequest not registered — WASM may have failed', 'boot-err');
+          return;
+        }
+
+        // Step 4: Register Service Worker
+        appendLine('$ Registering Service Worker...', 'boot-cmd');
+        try {
+          await registerServiceWorker();
+          appendLine('✓ Service Worker active and controlling this page', 'boot-ok');
+        } catch (swErr) {
+          // Service Worker is optional — direct calls to handleHTTPRequest still work
+          appendLine(`⚠ Service Worker registration failed: ${swErr.message}`, 'boot-info');
+          appendLine('  (Terminal will still work — requests go directly to WASM)', 'boot-info');
+        }
+
+        // Boot complete
+        appendLine('', '');
+        appendLine(`$ Go HTTP server is running on localhost:${42069}`, 'boot-ok');
+        appendLine('Server ready. Type a curl command below, or type "help" for usage.', 'boot-ok');
+        appendLine('', '');
+
+        // Enable the terminal input
+        commandInput.disabled = false;
+        commandInput.placeholder = 'curl localhost:42069/';
+        commandInput.focus();
+
+      } catch (err) {
+        appendLine(`✗ Boot failed: ${err.message}`, 'boot-err');
+        console.error('Boot error:', err);
+      }
+    }
+
+    // Start the boot sequence when the page loads
+    boot();
