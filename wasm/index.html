@@ -73,8 +73,37 @@
       font-size: 13px;
     }
 
+    /* Split container for side-by-side terminals */
+    .split-container {
+      display: flex;
+      flex-direction: row;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .terminal-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      width: 50%;
+    }
+
+    .right-pane {
+      border-left: 1px solid #333;
+    }
+
+    .pane-title {
+      background: #161b22;
+      color: #8b949e;
+      font-size: 12px;
+      padding: 4px 16px;
+      border-bottom: 1px solid #333;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
     /* Main terminal output area — scrollable */
-    #terminal {
+    #terminal, #logs-terminal {
       flex: 1;
       overflow-y: auto;
       padding: 16px;
@@ -88,48 +117,25 @@
     }
 
     /* Boot sequence styling */
-    .line.boot-cmd {
-      color: #58a6ff;
-    }
-
-    .line.boot-ok {
-      color: #3fb950;
-    }
-
-    .line.boot-err {
-      color: #f85149;
-    }
-
-    .line.boot-info {
-      color: #d29922;
-    }
+    .line.boot-cmd { color: #58a6ff; }
+    .line.boot-ok { color: #3fb950; }
+    .line.boot-err { color: #f85149; }
+    .line.boot-info { color: #d29922; }
 
     /* Prompt line styling */
-    .line.prompt {
-      color: #3fb950;
-    }
+    .line.prompt { color: #3fb950; }
 
     /* HTTP response styling */
-    .line.response-status {
-      color: #58a6ff;
-      font-weight: bold;
-    }
+    .line.response-status { color: #58a6ff; font-weight: bold; }
+    .line.response-header { color: #d2a8ff; }
+    .line.response-body { color: #e0e0e0; }
+    .line.error { color: #f85149; }
+    .line.help { color: #d29922; }
 
-    .line.response-header {
-      color: #d2a8ff;
-    }
-
-    .line.response-body {
-      color: #e0e0e0;
-    }
-
-    .line.error {
-      color: #f85149;
-    }
-
-    .line.help {
-      color: #d29922;
-    }
+    /* Log styling */
+    .line.log-info { color: #e0e0e0; }
+    .line.log-warn { color: #d29922; }
+    .line.log-error { color: #f85149; font-weight: bold; }
 
     /* Input line at the bottom */
     .input-area {
@@ -159,32 +165,17 @@
       caret-color: #3fb950;
     }
 
-    #command-input:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    #command-input::placeholder {
-      color: #484f58;
-    }
+    #command-input:disabled { opacity: 0.4; cursor: not-allowed; }
+    #command-input::placeholder { color: #484f58; }
 
     /* Scrollbar styling */
-    #terminal::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    #terminal::-webkit-scrollbar-track {
-      background: #0d1117;
-    }
-
-    #terminal::-webkit-scrollbar-thumb {
-      background: #30363d;
-      border-radius: 4px;
-    }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
   </style>
 </head>
 <body>
-  <!-- Terminal window chrome — decorative dots + title -->
+  <!-- Terminal window chrome -->
   <div class="title-bar">
     <span class="dot dot-red"></span>
     <span class="dot dot-yellow"></span>
@@ -192,20 +183,29 @@
     <span class="title">Go HTTP Server — WebAssembly Terminal</span>
   </div>
 
-  <!-- Terminal output area — boot log and command responses appear here -->
-  <div id="terminal"></div>
+  <div class="split-container">
+    <!-- Left Pane: Client Terminal -->
+    <div class="terminal-pane">
+      <div class="pane-title">Client (curl)</div>
+      <div id="terminal"></div>
+      <div class="input-area">
+        <span class="prompt-symbol">$</span>
+        <input
+          type="text"
+          id="command-input"
+          placeholder="Loading server..."
+          disabled
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+    </div>
 
-  <!-- Command input area — user types curl commands here -->
-  <div class="input-area">
-    <span class="prompt-symbol">$</span>
-    <input
-      type="text"
-      id="command-input"
-      placeholder="Loading server..."
-      disabled
-      autocomplete="off"
-      spellcheck="false"
-    />
+    <!-- Right Pane: Server Logs -->
+    <div class="terminal-pane right-pane">
+      <div class="pane-title">Server Logs (WASM Output)</div>
+      <div id="logs-terminal"></div>
+    </div>
   </div>
 
   <!--
@@ -229,11 +229,43 @@
     // ====================================================================
 
     const terminal = document.getElementById('terminal');
+    const logsTerminal = document.getElementById('logs-terminal');
     const commandInput = document.getElementById('command-input');
 
     // Command history for up/down arrow navigation (like a real terminal)
     const commandHistory = [];
     let historyIndex = -1;
+
+    // ====================================================================
+    // Log Interception
+    // ====================================================================
+
+    function appendLogLine(text, type = 'info') {
+      const line = document.createElement('div');
+      line.className = 'line log-' + type;
+      line.textContent = text;
+      logsTerminal.appendChild(line);
+      logsTerminal.scrollTop = logsTerminal.scrollHeight;
+    }
+
+    const originalConsoleLog = console.log;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
+
+    console.log = function(...args) {
+      originalConsoleLog.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'info');
+    };
+
+    console.warn = function(...args) {
+      originalConsoleWarn.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'warn');
+    };
+
+    console.error = function(...args) {
+      originalConsoleError.apply(console, args);
+      appendLogLine(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '), 'error');
+    };
 
     // ====================================================================
     // Output Helpers
