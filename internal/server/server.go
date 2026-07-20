@@ -14,6 +14,8 @@ type HandlerError struct {
 	Message    string
 }
 
+// Handler is the function signature for HTTP request handlers.
+// Both the native TCP server and the WASM bridge use this type.
 type Handler func(w *response.Writer, req *request.Request)
 
 type Server struct {
@@ -22,7 +24,15 @@ type Server struct {
 	handler Handler
 }
 
-func runConnection(s *Server, conn io.ReadWriteCloser) {
+// RunConnection handles a single HTTP request/response cycle on the given
+// ReadWriteCloser. It reads the raw HTTP/1.1 request, parses it, invokes the
+// handler, and writes the response.
+//
+// This function is exported (capitalized) so the WASM bridge can call it
+// directly. In native mode, it's called by runServer() for each accepted
+// TCP connection. In WASM mode, the bridge creates an io.Pipe-based
+// ReadWriteCloser and passes it here.
+func RunConnection(handler Handler, conn io.ReadWriteCloser) {
 	defer conn.Close()
 
 	responseWriter := response.NewWriter(conn)
@@ -33,7 +43,22 @@ func runConnection(s *Server, conn io.ReadWriteCloser) {
 		return
 	}
 
-	s.handler(responseWriter, r)
+	handler(responseWriter, r)
+}
+
+// HandleRequest is the public API for processing a single HTTP request on an
+// io.ReadWriteCloser. This is the entry point used by the WASM bridge
+// (wasm_bridge.go) to process requests without a TCP listener.
+//
+// In the WASM environment:
+//   - rw.Read()  returns raw HTTP/1.1 request bytes from an io.Pipe
+//   - rw.Write() captures raw HTTP/1.1 response bytes into a buffer
+//   - rw.Close() is a no-op (no real socket to close)
+//
+// This function exists separately from RunConnection to provide a clean
+// public API that doesn't depend on Server state.
+func HandleRequest(handler Handler, rw io.ReadWriteCloser) {
+	RunConnection(handler, rw)
 }
 
 func runServer(s *Server, listener net.Listener) {
@@ -47,7 +72,7 @@ func runServer(s *Server, listener net.Listener) {
 			return
 		}
 
-		go runConnection(s, conn)
+		go RunConnection(s.handler, conn)
 	}
 }
 
