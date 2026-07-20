@@ -1,0 +1,60 @@
+name: Deploy WASM to Portfolio
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Repository
+        uses: actions/checkout@v4
+        with:
+          path: source-repo
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'source-repo/go.mod'
+
+      - name: Build WebAssembly
+        working-directory: source-repo
+        run: |
+          make wasm-all
+
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          repository: prantoran/prantoran.github.io
+          token: ${{ secrets.DEPLOY_PAT }}
+          path: target-repo
+
+      - name: Copy Files & Push to Target Repo
+        working-directory: target-repo
+        run: |
+          # Create target directory if it doesn't exist
+          mkdir -p httpfromtcp
+          
+          # Remove old contents to ensure deleted files are removed from the remote
+          rm -rf httpfromtcp/*
+          
+          # Copy fresh build contents
+          cp -r ../source-repo/wasm/* httpfromtcp/
+          
+          # Configure Git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage the directory
+          git add httpfromtcp/
+          
+          # Only commit and push if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Deploy WASM from httpfromtcp"
+            git push origin main
+          fi
