@@ -188,5 +188,14 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 
 	}
 
+	fmt.Printf("[Request Line] HttpVersion: %s | Method: %s | RequestTarget: %s\n", request.RequestLine.HttpVersion, request.RequestLine.Method, request.RequestLine.RequestTarget)
+
+	fmt.Printf("[Headers]:\n")
+	request.Headers.ForEach(func(k, v string) {
+		fmt.Printf("%s: %s\n", k, v)
+	})
+	fmt.Printf("[Request Body] ----\n%s\n", request.Body)
+	fmt.Printf("[Request Body] ----\n")
+
 	return request, nil
 }
